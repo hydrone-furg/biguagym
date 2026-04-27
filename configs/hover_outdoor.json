@@ -1,0 +1,45 @@
+{
+    "package_name": "SkyDive",               
+    "world": "Pier-Harbor",                            
+    "main_agent": "main",                               
+    "ticks_per_sec": 20,
+    "frames_per_sec": true,                        
+    "agents":[                                          
+        {                                               
+            "agent_name": "main",                       
+            "agent_type": null,     
+            "sensors": [
+                {
+                    "sensor_type": "DynamicsSensor",
+                    "socket": "IMUSocket",
+                    "configuration": {
+                        "UseCOM": true,
+                        "UseRPY": false
+                    }
+                },
+                {
+                    "sensor_name": "DenoiseIMUSensor",
+                    "sensor_type": "IMUSensor",
+                    "socket": "IMUSocket",
+                    "rotation": [0, 0, 180]
+                },
+                {
+                    "sensor_name": "NoiseIMUSensor",
+                    "sensor_type": "IMUSensor",
+                    "socket": "IMUSocket",
+                    "configuration": {
+                        "AccelSigma": 10,
+                        "AngVelSigma": 10,
+                        "ReturnBias": true
+                    }
+                }
+            ],
+            "dynamics" : {
+                "batch_size" : null
+            },  
+            "control_abstraction": "cmd_motor_speeds",
+            "location": [50, 50, 3],
+            "rotation": [0, 0, 0]
+        }
+    ]
+}
