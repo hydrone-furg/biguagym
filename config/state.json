@@ -1,12 +1,12 @@
 {
     "package_name": "SkyDive",               
     "world": "Pier-Harbor",                            
-    "main_agent": "main",                               
+    "main_agent": "robot0",                               
     "ticks_per_sec": 20,
     "frames_per_sec": true,                        
     "agents":[                                          
         {                                               
-            "agent_name": "main",                       
+            "agent_name": "robot0",                       
             "agent_type": null,     
             "sensors": [
                 {
@@ -15,13 +15,28 @@
                     "configuration": {
                         "UseCOM": true,
                         "UseRPY": false
-                    }
+                    },
+                    "location" : [0,0,0],
+                    "rotation" : [0,0,0]
+                },
+                {
+                    "sensor_name": "RPYDynamicsSensor",
+                    "sensor_type": "DynamicsSensor",
+                    "socket": "IMUSocket",
+                    "configuration": {
+                        "UseCOM": false,
+                        "UseRPY": true
+                    },
+                    "location" : [0,0,0],
+                    "rotation" : [0,0,0]
                 },
                 {
                     "sensor_name": "DenoiseIMUSensor",
                     "sensor_type": "IMUSensor",
                     "socket": "IMUSocket",
-                    "rotation": [0, 0, 180]
+                    "configuration" : {},
+                    "location" : [0,0,0],
+                    "rotation" : [0,0,0]
                 },
                 {
                     "sensor_name": "NoiseIMUSensor",
@@ -31,15 +46,17 @@
                         "AccelSigma": 10,
                         "AngVelSigma": 10,
                         "ReturnBias": true
-                    }
+                    },
+                    "location" : [0,0,0],
+                    "rotation" : [0,0,0]
                 }
             ],
             "dynamics" : {
                 "batch_size" : null
             },  
-            "control_abstraction": "cmd_motor_speeds",
-            "location": [50, 50, 3],
-            "rotation": [0, 0, 0]
+            "control_abstraction": null,
+            "location": null,
+            "rotation": null
         }
     ]
 }
