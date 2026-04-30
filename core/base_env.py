@@ -39,7 +39,7 @@ from abc import ABC, abstractmethod
 from collections import deque
 from dm_env import specs, StepType
 from gymnasium import spaces
-from typing import Any, NamedTuple, Optional, Dict, Any
+from typing import Any, NamedTuple, Optional, Dict
 from numpy.typing import NDArray
 
 
@@ -491,7 +491,8 @@ class BiguaGymEnv(BaseEnv):
         self.show_viewer = show_viewer
 
         self.rng = np.random.default_rng(seed=seed)
-        
+
+        self._env = self._build_env()
         self._init_spaces()
 
     # ------------------------------------------------------------------
@@ -553,7 +554,7 @@ class BiguaGymEnv(BaseEnv):
         """Execute one physics step; return ``(obs, reward, terminated, truncated, info)``."""
 
     def close(self) -> None:
-        self._env.close()
+        del self._env
 
 
 

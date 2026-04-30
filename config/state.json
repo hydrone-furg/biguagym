@@ -3,7 +3,7 @@
     "world": "Pier-Harbor",                            
     "main_agent": "robot0",                               
     "ticks_per_sec": 20,
-    "frames_per_sec": true,                        
+    "frames_per_sec": 20,                        
     "agents":[                                          
         {                                               
             "agent_name": "robot0",                       

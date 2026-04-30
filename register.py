@@ -8,7 +8,7 @@ gym.register(
         'seed' : 42,
         'agent_type' : 'DjiMatrice',
         'control_abstraction' : 'cmd_motor_speeds',
-        'location' : [0,0,0],
+        'location' : [100,100,5],
         'rotation' : [0,0,0]
         }
 )
