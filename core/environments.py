@@ -67,6 +67,7 @@ class StateEnv(BiguaGymEnv):
         self._on_target = False
         self._on_target_buf = 0  # cross-episode success counter (drives target_factor curriculum)
         self._target = None
+        self._target_list = []
 
         # action_stack_shape requires the underlying env's action dim, which is
         # only known after _build_env(). Initialize without it, then inject.
@@ -78,6 +79,10 @@ class StateEnv(BiguaGymEnv):
             self._action_stack = ActionStack(
                 (action_stack, int(self._env.action_space.shape[0]))
             )
+
+    @property
+    def max_episode_steps(self) -> int:
+        return 1000  # BiguaGym default
 
     def _build_params(self):
         env_params: dict = self._load_config(f"{CONFIG}/state.json")
@@ -104,10 +109,7 @@ class StateEnv(BiguaGymEnv):
         }
 
         return env_params.copy(), obs_params.copy()
-
-    @property
-    def max_episode_steps(self) -> int:
-        return 1000  # BiguaGym default
+    
 
     def _build_env(self):
         return biguasim.make(scenario_cfg=self.env_cfg, show_viewport=self.show_viewer)
@@ -126,7 +128,8 @@ class StateEnv(BiguaGymEnv):
         self._on_target = False
 
         if self._on_target_buf % self._target_factor == 0:
-            self._target = self.rng.uniform(low=self._bounds[0], high=self._bounds[1])
+            self._target : NDArray = self.rng.uniform(low=self._bounds[0], high=self._bounds[1])
+            self._target_list = self._target.tolist()
 
         return self._wrap_state(state), {}
 
@@ -173,8 +176,12 @@ class StateEnv(BiguaGymEnv):
         spin_reward = -yaw_rate * 0.2
 
         return norm_reward + smooth_reward + stable_reward + spin_reward
+    
+    def _env_constraints(self) -> None:
+        self._env.draw_point(self._target_list)
 
     def _step(self, action: NDArray) -> tuple:
+        self._env_constraints()
         self._episode_steps += self._action_repeat
 
         flat = np.asarray(action, dtype=np.float32).ravel()
