@@ -49,6 +49,16 @@
                     },
                     "location" : [0,0,0],
                     "rotation" : [0,0,0]
+                },
+                {
+                    "sensor_name": "CameraView",
+                    "sensor_type": "ViewportCapture",
+                    "configuration" : {
+                        "CaptureWidth" : 1280,
+                        "CaptureHeight" : 720
+                    },
+                    "location" : [0,0,0],
+                    "rotation" : [0,0,0]
                 }
             ],
             "dynamics" : {

@@ -1,11 +1,12 @@
-import register  # noqa: F401  # registers DjiMatriceHover-v0
+import register  # noqa: F401
 import gymnasium as gym
 import numpy as np
 
 from gymnasium.wrappers import RecordEpisodeStatistics
 
 if __name__ == '__main__':
-    env = gym.make('HydroneHover-v0', show_viewer=True)
+    env = gym.make('HydroneTrajectoryFollower-v0', show_viewer=True,
+                   target_trajectory='spiral', render_mode='rgb_array')
 
     env = RecordEpisodeStatistics(env)
 
@@ -13,19 +14,20 @@ if __name__ == '__main__':
     episode_over = False
     total_reward = 0
 
-    while not episode_over:
-        # Choose an action: 0 = push cart left, 1 = push cart right
-        action =  np.zeros(4) # Random action for now - real agents will be smarter!
+    # Start manual recording — frames are collected on each render() call.
+    env.unwrapped.start_recording('episode.mp4', fps=20)
 
-        # Take the action and see what happens
+    while not episode_over:
+        action = 150 * np.ones(4)
         observation, reward, terminated, truncated, info = env.step(action)
 
-        # reward: +1 for each step the pole stays upright
-        # terminated: True if pole falls too far (agent failed)
-        # truncated: True if we hit the time limit (500 steps)
+        # Pull the latest CameraView frame (also appends to the recording buffer).
+        frame = env.unwrapped.render()
 
         total_reward += reward
         episode_over = terminated or truncated
+
+    env.unwrapped.stop_recording()
 
     print(f"Episode finished! Total reward: {total_reward}")
     print(info)

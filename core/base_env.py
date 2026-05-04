@@ -39,7 +39,7 @@ from abc import ABC, abstractmethod
 from collections import deque
 from dm_env import specs, StepType
 from gymnasium import spaces
-from typing import Any, NamedTuple, Optional, Dict
+from typing import Any, NamedTuple, Optional, Dict, List
 from numpy.typing import NDArray
 
 
@@ -471,7 +471,12 @@ class BiguaGymEnv(BaseEnv):
         Open an interactive viewer window.
     action_stack_shape:
         Optional ``(stack_size, action_dim)`` for action-history stacking.
+    render_mode:
+        ``"rgb_array"`` to enable :meth:`render` (compatible with
+        ``gym.wrappers.RecordVideo``).  ``None`` disables rendering.
     """
+
+    metadata: dict = {"render_modes": ["rgb_array"]}
 
     def __init__(
         self,
@@ -481,16 +486,30 @@ class BiguaGymEnv(BaseEnv):
         output_mode: str = "gym",
         show_viewer: bool = False,
         action_stack_shape: Optional[tuple] = None,
+        render_mode: Optional[str] = None,
     ) -> None:
 
         super().__init__(output_mode=output_mode, action_stack_shape=action_stack_shape)
+
+        if render_mode is not None and render_mode not in self.metadata["render_modes"]:
+            raise ValueError(
+                f"render_mode must be one of {self.metadata['render_modes']!r}, "
+                f"got {render_mode!r}"
+            )
 
         self.seed = seed
         self.env_cfg = env_params
         self.obs_cfg = obs_params
         self.show_viewer = show_viewer
+        self.render_mode = render_mode
 
         self.rng = np.random.default_rng(seed=seed)
+
+        self._last_render_frame: Optional[NDArray] = None
+        self._recording: bool = False
+        self._record_writer = None  # cv2.VideoWriter, created lazily on first frame
+        self._record_path: Optional[str] = None
+        self._record_fps: int = 20
 
         self._env = self._build_env()
         self._init_spaces()
@@ -553,7 +572,66 @@ class BiguaGymEnv(BaseEnv):
     def _step(self, action: Any) -> tuple[Any, float, bool, bool, dict]:
         """Execute one physics step; return ``(obs, reward, terminated, truncated, info)``."""
 
+    # ------------------------------------------------------------------
+    # Rendering and recording
+    # ------------------------------------------------------------------
+
+    def render(self) -> Optional[NDArray]:
+        """Return the latest RGB frame from ``CameraView`` as a uint8 array.
+
+        Compatible with ``gym.wrappers.RecordVideo`` when the env is
+        constructed with ``render_mode="rgb_array"``.  Returns ``None``
+        if no frame has been captured yet or ``render_mode`` is not set.
+        """
+        if self.render_mode != "rgb_array" or self._last_render_frame is None:
+            return None
+        frame = self._last_render_frame
+        if self._recording:
+            self._write_frame(frame)
+        return frame
+
+    def start_recording(self, path: str, fps: int = 20) -> None:
+        """Begin writing rendered frames to a video file with ``cv2.VideoWriter``.
+
+        Parameters
+        ----------
+        path:
+            Output file path (e.g. ``"episode.mp4"``).
+        fps:
+            Frames per second of the output video.
+        """
+        import cv2  # noqa: F401 — validate import early
+        self._record_path = path
+        self._record_fps = fps
+        self._record_writer = None  # created lazily on first frame (need frame shape)
+        self._recording = True
+
+    def _write_frame(self, frame: NDArray) -> None:
+        import cv2
+        if self._record_writer is None:
+            h, w = frame.shape[:2]
+            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+            self._record_writer = cv2.VideoWriter(
+                self._record_path, fourcc, self._record_fps, (w, h)
+            )
+        # cv2 expects BGR
+        self._record_writer.write(frame)
+
+    def stop_recording(self) -> None:
+        """Flush and close the video file.
+
+        Does nothing if recording was never started.
+        """
+        if not self._recording:
+            return
+        self._recording = False
+        if self._record_writer is not None:
+            self._record_writer.release()
+            self._record_writer = None
+
     def close(self) -> None:
+        if self._recording:
+            self.stop_recording()
         del self._env
 
 
