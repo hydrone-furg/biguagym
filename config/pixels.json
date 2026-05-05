@@ -1,0 +1,103 @@
+{
+    "package_name": "SkyDive",
+    "world": "Pier-Harbor",
+    "main_agent": "robot0",
+    "ticks_per_sec": 20,
+    "frames_per_sec": 20,
+    "agents":[
+        {
+            "agent_name": "robot0",
+            "agent_type": null,
+            "sensors": [
+                {
+                    "sensor_type": "DynamicsSensor",
+                    "socket": "IMUSocket",
+                    "configuration": {
+                        "UseCOM": true,
+                        "UseRPY": false
+                    },
+                    "location" : [0,0,0],
+                    "rotation" : [0,0,0]
+                },
+                {
+                    "sensor_name": "RPYDynamicsSensor",
+                    "sensor_type": "DynamicsSensor",
+                    "socket": "IMUSocket",
+                    "configuration": {
+                        "UseCOM": false,
+                        "UseRPY": true
+                    },
+                    "location" : [0,0,0],
+                    "rotation" : [0,0,0]
+                },
+                {
+                    "sensor_name": "DenoiseIMUSensor",
+                    "sensor_type": "IMUSensor",
+                    "socket": "IMUSocket",
+                    "configuration" : {},
+                    "location" : [0,0,0],
+                    "rotation" : [0,0,0]
+                },
+                {
+                    "sensor_name": "NoiseIMUSensor",
+                    "sensor_type": "IMUSensor",
+                    "socket": "IMUSocket",
+                    "configuration": {
+                        "AccelSigma": 10,
+                        "AngVelSigma": 10,
+                        "ReturnBias": true
+                    },
+                    "location" : [0,0,0],
+                    "rotation" : [0,0,0]
+                },
+                {
+                    "sensor_name": "CameraView",
+                    "sensor_type": "ViewportCapture",
+                    "configuration" : {
+                        "CaptureWidth" : 1280,
+                        "CaptureHeight" : 720
+                    },
+                    "location" : [0,0,0],
+                    "rotation" : [0,0,0]
+                },
+                {
+                    "sensor_name": "RGBCamera",
+                    "sensor_type": "RGBCamera",
+                    "configuration": {
+                        "CaptureWidth": 100,
+                        "CaptureHeight": 100
+                    },
+                    "location": [0,0,0],
+                    "rotation": [0,0,0]
+                },
+                {
+                    "sensor_name": "DepthCamera",
+                    "sensor_type": "DepthCamera",
+                    "configuration": {
+                        "CaptureWidth": 100,
+                        "CaptureHeight": 100,
+                        "Debug": true
+                    },
+                    "location": [0,0,0],
+                    "rotation": [0,0,0]
+                },
+                {
+                    "sensor_name": "AnnotationComponent",
+                    "sensor_type": "AnnotationComponent",
+                    "configuration": {
+                        "CaptureWidth": 100,
+                        "CaptureHeight": 100
+                    },
+                    "location": [0,0,0],
+                    "rotation": [0,0,0]
+                }
+            ],
+            "dynamics" : {
+                "batch_size" : null
+            },
+            "control_abstraction": null,
+            "location": null,
+            "rotation": null
+        }
+    ]
+}

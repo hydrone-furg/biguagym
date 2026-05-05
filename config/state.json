@@ -31,26 +31,6 @@
                     "rotation" : [0,0,0]
                 },
                 {
-                    "sensor_name": "DenoiseIMUSensor",
-                    "sensor_type": "IMUSensor",
-                    "socket": "IMUSocket",
-                    "configuration" : {},
-                    "location" : [0,0,0],
-                    "rotation" : [0,0,0]
-                },
-                {
-                    "sensor_name": "NoiseIMUSensor",
-                    "sensor_type": "IMUSensor",
-                    "socket": "IMUSocket",
-                    "configuration": {
-                        "AccelSigma": 10,
-                        "AngVelSigma": 10,
-                        "ReturnBias": true
-                    },
-                    "location" : [0,0,0],
-                    "rotation" : [0,0,0]
-                },
-                {
                     "sensor_name": "CameraView",
                     "sensor_type": "ViewportCapture",
                     "configuration" : {

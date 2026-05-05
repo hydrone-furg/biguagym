@@ -9,7 +9,7 @@ from gymnasium import spaces
 from pathlib import Path
 from scipy.interpolate import splprep, splev
 
-from .base_env import BiguaGymEnv
+from .base_env import BiguaGymEnv, PixelStack
 from .space import DATA_REGISTRY
 
 CONFIG = f'{Path(__file__).resolve().parent.parent}/config'
@@ -934,3 +934,297 @@ class TrajectoryEnv(NavEnv):
             "reached_goals": int(self._on_target_buf),
         }
         return obs, float(reward), terminated, truncated, info
+
+
+# ---------------------------------------------------------------------------
+# _PixelObsMixin
+# ---------------------------------------------------------------------------
+
+class _PixelObsMixin:
+    """Mixin that replaces the flat-Box observation with stacked-pixel Dict observations.
+
+    Place before the task env in the MRO so its ``_wrap_state`` and ``_reset``
+    overrides take effect.  Call ``_setup_pixel`` after the parent ``__init__``
+    finishes (so ``observation_space`` is already a Box).
+
+    The resulting ``observation_space`` is a :class:`gymnasium.spaces.Dict` keyed
+    by channel name (``"rgb"``, ``"depth"``, ``"segmentation"``, ``"normal"``) and
+    optionally ``"state"``.  Each channel contains a ``(3*frame_stack, H, W)``
+    array so the shape is compatible with convolutional encoders.
+    """
+
+    def _setup_pixel(
+        self,
+        pixel_channels: list,
+        frame_stack: int,
+        frame_size: tuple,
+        include_state: bool,
+    ) -> None:
+        self._frame_stack_n = frame_stack
+        self._frame_size = tuple(frame_size)
+        self._pixel_channels = pixel_channels
+        self._include_state = include_state
+        self._pixel_stack_obj = PixelStack(pixel_channels, list(frame_size), frame_stack)
+        self._wrap_is_reset = False
+        state_dim = int(self.observation_space.shape[0])
+        self.observation_space = self._build_pixel_obs_space(state_dim)
+
+    def _build_params(self):
+        env_params, obs_params = super()._build_params()
+        # Swap the sensor list for the pixel config which adds RGBCamera,
+        # DepthCamera, and AnnotationComponent before biguasim.make is called.
+        pixel_cfg = self._load_config(f"{CONFIG}/pixels.json")
+        _id = self._agent_id(env_params, 'robot0')
+        pixel_id = self._agent_id(pixel_cfg, 'robot0')
+        env_params['agents'][_id]['sensors'] = pixel_cfg['agents'][pixel_id]['sensors']
+        return env_params, obs_params
+
+    def _build_pixel_obs_space(self, state_dim: int) -> spaces.Dict:
+        pixel_spaces = {}
+        for ch in self._pixel_channels:
+            if ch in ('rgb', 'segmentation'):
+                pixel_spaces[ch] = spaces.Box(
+                    0, 255, (3 * self._frame_stack_n, *self._frame_size), np.uint8
+                )
+            else:
+                pixel_spaces[ch] = spaces.Box(
+                    -np.inf, np.inf, (3 * self._frame_stack_n, *self._frame_size), np.float32
+                )
+        if self._include_state:
+            pixel_spaces['state'] = spaces.Box(
+                -np.inf, np.inf, (state_dim,), np.float32
+            )
+        return spaces.Dict(pixel_spaces)
+
+    def _wrap_state(self, state: dict) -> dict:
+        state_obs = super()._wrap_state(state)
+
+        # --- RGB: (H, W, 4) RGBA uint8 → drop alpha ---
+        raw_rgb = state.get('RGBCamera')
+        if raw_rgb is not None:
+            rgb = np.asarray(raw_rgb[:, :, :3], dtype=np.float32)
+        else:
+            h, w = self._frame_size
+            rgb = np.zeros((h, w, 3), dtype=np.float32)
+
+        # --- Depth: dict with 'depth_map' key → (H, W) float32 → normalize to grayscale (H, W, 3) ---
+        raw_depth = state.get('DepthCamera')
+        if raw_depth is not None:
+            depth_map = np.asarray(
+                raw_depth['depth_map'] if isinstance(raw_depth, dict) else raw_depth,
+                dtype=np.float32,
+            )
+            d_min, d_max = float(depth_map.min()), float(depth_map.max())
+            if d_max > d_min:
+                gray = ((depth_map - d_min) / (d_max - d_min) * 255.0)
+            else:
+                gray = np.zeros_like(depth_map)
+            depth = np.stack([gray, gray, gray], axis=-1)
+        else:
+            h, w = self._frame_size
+            depth = np.zeros((h, w, 3), dtype=np.float32)
+
+        # --- Segmentation: (H, W, 4) RGBA uint8 → drop alpha ---
+        raw_seg = state.get('AnnotationComponent')
+        if raw_seg is not None:
+            seg = np.asarray(raw_seg[:, :, :3], dtype=np.float32)
+        else:
+            h, w = self._frame_size
+            seg = np.zeros((h, w, 3), dtype=np.float32)
+
+        # Normal: no sensor available; pass zeros as placeholder
+        h, w = self._frame_size
+        normal = np.zeros((h, w, 3), dtype=np.float32)
+
+        self._pixel_stack_obj.append((rgb, depth, seg, normal), self._wrap_is_reset)
+        self._wrap_is_reset = False
+        stacked = self._pixel_stack_obj.built_stack()
+        obs = {ch: stacked[ch] for ch in self._pixel_channels}
+        if self._include_state:
+            obs['state'] = state_obs
+        return obs
+
+    def _reset(self):
+        self._wrap_is_reset = True
+        return super()._reset()
+
+
+# ---------------------------------------------------------------------------
+# Pixel env classes
+# ---------------------------------------------------------------------------
+
+class HoverPixelEnv(_PixelObsMixin, HoverEnv):
+    """Pixel-observation variant of :class:`HoverEnv`.
+
+    Parameters
+    ----------
+    pixel_channels:
+        Subset of ``["rgb", "depth", "segmentation", "normal"]`` to include.
+        Defaults to ``["rgb"]``.
+    frame_stack:
+        Number of consecutive frames to stack (observation shape axis 0 = 3 * frame_stack).
+    frame_size:
+        ``(H, W)`` target resolution for each frame.
+    include_state:
+        When ``True``, adds a ``"state"`` key with the flat state vector.
+    """
+
+    def __init__(
+        self,
+        seed: int,
+        agent_type: str,
+        control_abstraction: str,
+        location: list,
+        rotation: list,
+        batch_size: int = 1,
+        observation_type: str | List[str] = "DynamicsSensor",
+        show_viewer: bool = False,
+        timestep: bool = False,
+        action_stack: int = 1,
+        target_factor: int = 1,
+        render_mode: str = None,
+        pixel_channels: list = None,
+        frame_stack: int = 3,
+        frame_size: tuple = (84, 84),
+        include_state: bool = False,
+    ) -> None:
+        if pixel_channels is None:
+            pixel_channels = ['rgb']
+        super().__init__(
+            seed, agent_type, control_abstraction, location, rotation,
+            batch_size, observation_type, show_viewer, timestep,
+            action_stack, target_factor, render_mode,
+        )
+        self._setup_pixel(pixel_channels, frame_stack, frame_size, include_state)
+
+
+class LandPixelEnv(_PixelObsMixin, LandEnv):
+    """Pixel-observation variant of :class:`LandEnv`."""
+
+    def __init__(
+        self,
+        seed: int,
+        agent_type: str,
+        control_abstraction: str,
+        location: list,
+        rotation: list,
+        batch_size: int = 1,
+        observation_type: str | List[str] = "DynamicsSensor",
+        show_viewer: bool = False,
+        timestep: bool = False,
+        action_stack: int = 1,
+        target_factor: int = 1,
+        render_mode: str = None,
+        pixel_channels: list = None,
+        frame_stack: int = 3,
+        frame_size: tuple = (84, 84),
+        include_state: bool = False,
+    ) -> None:
+        if pixel_channels is None:
+            pixel_channels = ['rgb']
+        super().__init__(
+            seed, agent_type, control_abstraction, location, rotation,
+            batch_size, observation_type, show_viewer, timestep,
+            action_stack, target_factor, render_mode,
+        )
+        self._setup_pixel(pixel_channels, frame_stack, frame_size, include_state)
+
+
+class DockPixelEnv(_PixelObsMixin, DockEnv):
+    """Pixel-observation variant of :class:`DockEnv`."""
+
+    def __init__(
+        self,
+        seed: int,
+        agent_type: str,
+        control_abstraction: str,
+        location: list,
+        rotation: list,
+        batch_size: int = 1,
+        observation_type: str | List[str] = "DynamicsSensor",
+        show_viewer: bool = False,
+        timestep: bool = False,
+        action_stack: int = 1,
+        target_factor: int = 1,
+        render_mode: str = None,
+        pixel_channels: list = None,
+        frame_stack: int = 3,
+        frame_size: tuple = (84, 84),
+        include_state: bool = False,
+    ) -> None:
+        if pixel_channels is None:
+            pixel_channels = ['rgb']
+        super().__init__(
+            seed, agent_type, control_abstraction, location, rotation,
+            batch_size, observation_type, show_viewer, timestep,
+            action_stack, target_factor, render_mode,
+        )
+        self._setup_pixel(pixel_channels, frame_stack, frame_size, include_state)
+
+
+class NavPixelEnv(_PixelObsMixin, NavEnv):
+    """Pixel-observation variant of :class:`NavEnv`."""
+
+    def __init__(
+        self,
+        seed: int,
+        agent_type: str,
+        control_abstraction: str,
+        location: list,
+        rotation: list,
+        batch_size: int = 1,
+        observation_type: str | List[str] = "DynamicsSensor",
+        show_viewer: bool = False,
+        timestep: bool = False,
+        action_stack: int = 1,
+        target_factor: int = 1,
+        render_mode: str = None,
+        pixel_channels: list = None,
+        frame_stack: int = 3,
+        frame_size: tuple = (84, 84),
+        include_state: bool = False,
+    ) -> None:
+        if pixel_channels is None:
+            pixel_channels = ['rgb']
+        super().__init__(
+            seed, agent_type, control_abstraction, location, rotation,
+            batch_size, observation_type, show_viewer, timestep,
+            action_stack, target_factor, render_mode,
+        )
+        self._setup_pixel(pixel_channels, frame_stack, frame_size, include_state)
+
+
+class TrajectoryPixelEnv(_PixelObsMixin, TrajectoryEnv):
+    """Pixel-observation variant of :class:`TrajectoryEnv`."""
+
+    def __init__(
+        self,
+        seed: int,
+        agent_type: str,
+        control_abstraction: str,
+        location: list,
+        rotation: list,
+        batch_size: int = 1,
+        observation_type: str | List[str] = "DynamicsSensor",
+        show_viewer: bool = False,
+        timestep: bool = False,
+        action_stack: int = 1,
+        target_factor: int = 1,
+        target_trajectory: str | NDArray = 'sine',
+        n_lookahead: int = 5,
+        waypoint_radius: float = 0.2,
+        render_mode: str = None,
+        pixel_channels: list = None,
+        frame_stack: int = 3,
+        frame_size: tuple = (84, 84),
+        include_state: bool = False,
+    ) -> None:
+        if pixel_channels is None:
+            pixel_channels = ['rgb']
+        super().__init__(
+            seed, agent_type, control_abstraction, location, rotation,
+            batch_size, observation_type, show_viewer, timestep,
+            action_stack, target_factor, target_trajectory, n_lookahead,
+            waypoint_radius, render_mode,
+        )
+        self._setup_pixel(pixel_channels, frame_stack, frame_size, include_state)

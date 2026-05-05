@@ -143,7 +143,7 @@ class PixelStack:
                 img = img.astype(np.uint8)
             self._stack[k].append(img)
             if len(self._stack[k]) == 1:
-                self._stack[k] = self._stack[k] * self._size
+                self._stack[k] = deque(list(self._stack[k]) * self._size, maxlen=self._size)
 
     def built_stack(self) -> dict:
         """Return a dict mapping channel name → stacked array (concatenated on axis 0)."""
