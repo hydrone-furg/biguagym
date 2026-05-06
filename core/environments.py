@@ -951,32 +951,54 @@ class _PixelObsMixin:
     by channel name (``"rgb"``, ``"depth"``, ``"segmentation"``, ``"normal"``) and
     optionally ``"state"``.  Each channel contains a ``(3*frame_stack, H, W)``
     array so the shape is compatible with convolutional encoders.
+
+    ``self._pixel_channels`` **must** be set before ``super().__init__()`` is
+    called so that ``_build_params`` can filter the sensor list to only the
+    cameras that are actually needed.
     """
+
+    # Maps pixel channel names to the corresponding biguasim sensor_name in pixels.json.
+    _CHANNEL_SENSOR: dict = {
+        'rgb': 'RGBCamera',
+        'depth': 'DepthCamera',
+        'segmentation': 'AnnotationComponent',
+        # 'normal' has no backing sensor — always synthesised as zeros
+    }
 
     def _setup_pixel(
         self,
-        pixel_channels: list,
         frame_stack: int,
         frame_size: tuple,
         include_state: bool,
+        render_channel: str | None = None,
     ) -> None:
         self._frame_stack_n = frame_stack
         self._frame_size = tuple(frame_size)
-        self._pixel_channels = pixel_channels
         self._include_state = include_state
-        self._pixel_stack_obj = PixelStack(pixel_channels, list(frame_size), frame_stack)
+        self._render_channel = render_channel
+        self._pixel_stack_obj = PixelStack(self._pixel_channels, list(frame_size), frame_stack)
         self._wrap_is_reset = False
         state_dim = int(self.observation_space.shape[0])
         self.observation_space = self._build_pixel_obs_space(state_dim)
 
     def _build_params(self):
         env_params, obs_params = super()._build_params()
-        # Swap the sensor list for the pixel config which adds RGBCamera,
-        # DepthCamera, and AnnotationComponent before biguasim.make is called.
         pixel_cfg = self._load_config(f"{CONFIG}/pixels.json")
         _id = self._agent_id(env_params, 'robot0')
         pixel_id = self._agent_id(pixel_cfg, 'robot0')
-        env_params['agents'][_id]['sensors'] = pixel_cfg['agents'][pixel_id]['sensors']
+
+        required = {self._CHANNEL_SENSOR[ch] for ch in self._pixel_channels if ch in self._CHANNEL_SENSOR}
+        # Also load the render channel sensor even when it is not an observation channel.
+        rc = getattr(self, '_render_channel', None)
+        if rc and rc in self._CHANNEL_SENSOR:
+            required.add(self._CHANNEL_SENSOR[rc])
+        visual = set(self._CHANNEL_SENSOR.values())
+
+        all_sensors = pixel_cfg['agents'][pixel_id]['sensors']
+        env_params['agents'][_id]['sensors'] = [
+            s for s in all_sensors
+            if s.get('sensor_name') not in visual or s.get('sensor_name') in required
+        ]
         return env_params, obs_params
 
     def _build_pixel_obs_space(self, state_dim: int) -> spaces.Dict:
@@ -999,13 +1021,11 @@ class _PixelObsMixin:
     def _wrap_state(self, state: dict) -> dict:
         state_obs = super()._wrap_state(state)
 
+        h, w = self._frame_size
+
         # --- RGB: (H, W, 4) RGBA uint8 → drop alpha ---
         raw_rgb = state.get('RGBCamera')
-        if raw_rgb is not None:
-            rgb = np.asarray(raw_rgb[:, :, :3], dtype=np.float32)
-        else:
-            h, w = self._frame_size
-            rgb = np.zeros((h, w, 3), dtype=np.float32)
+        rgb = np.asarray(raw_rgb[:, :, :3], dtype=np.float32) if raw_rgb is not None else np.zeros((h, w, 3), dtype=np.float32)
 
         # --- Depth: dict with 'depth_map' key → (H, W) float32 → normalize to grayscale (H, W, 3) ---
         raw_depth = state.get('DepthCamera')
@@ -1015,26 +1035,25 @@ class _PixelObsMixin:
                 dtype=np.float32,
             )
             d_min, d_max = float(depth_map.min()), float(depth_map.max())
-            if d_max > d_min:
-                gray = ((depth_map - d_min) / (d_max - d_min) * 255.0)
-            else:
-                gray = np.zeros_like(depth_map)
+            gray = ((depth_map - d_min) / (d_max - d_min) * 255.0) if d_max > d_min else np.zeros_like(depth_map)
             depth = np.stack([gray, gray, gray], axis=-1)
         else:
-            h, w = self._frame_size
             depth = np.zeros((h, w, 3), dtype=np.float32)
 
         # --- Segmentation: (H, W, 4) RGBA uint8 → drop alpha ---
         raw_seg = state.get('AnnotationComponent')
-        if raw_seg is not None:
-            seg = np.asarray(raw_seg[:, :, :3], dtype=np.float32)
-        else:
-            h, w = self._frame_size
-            seg = np.zeros((h, w, 3), dtype=np.float32)
+        seg = np.asarray(raw_seg[:, :, :3], dtype=np.float32) if raw_seg is not None else np.zeros((h, w, 3), dtype=np.float32)
 
-        # Normal: no sensor available; pass zeros as placeholder
-        h, w = self._frame_size
+        # Normal: no sensor available; synthesised as zeros
         normal = np.zeros((h, w, 3), dtype=np.float32)
+
+        raw_frames = {'rgb': rgb, 'depth': depth, 'segmentation': seg, 'normal': normal}
+
+        # Override the render frame with the chosen pixel channel (pre-stack, uint8 BGR).
+        if self._render_channel and self._render_channel in raw_frames:
+            import cv2
+            frame = np.clip(raw_frames[self._render_channel], 0, 255).astype(np.uint8)
+            self._last_render_frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
 
         self._pixel_stack_obj.append((rgb, depth, seg, normal), self._wrap_is_reset)
         self._wrap_is_reset = False
@@ -1067,6 +1086,11 @@ class HoverPixelEnv(_PixelObsMixin, HoverEnv):
         ``(H, W)`` target resolution for each frame.
     include_state:
         When ``True``, adds a ``"state"`` key with the flat state vector.
+    render_channel:
+        Which pixel channel to use as the render / recording source
+        (``"rgb"``, ``"depth"``, or ``"segmentation"``).  ``None`` falls back
+        to ``CameraView``.  The channel's sensor is loaded even when it is not
+        in ``pixel_channels``.
     """
 
     def __init__(
@@ -1087,15 +1111,16 @@ class HoverPixelEnv(_PixelObsMixin, HoverEnv):
         frame_stack: int = 3,
         frame_size: tuple = (84, 84),
         include_state: bool = False,
+        render_channel: str | None = None,
     ) -> None:
-        if pixel_channels is None:
-            pixel_channels = ['rgb']
+        self._pixel_channels = pixel_channels if pixel_channels is not None else ['rgb']
+        self._render_channel = render_channel
         super().__init__(
             seed, agent_type, control_abstraction, location, rotation,
             batch_size, observation_type, show_viewer, timestep,
             action_stack, target_factor, render_mode,
         )
-        self._setup_pixel(pixel_channels, frame_stack, frame_size, include_state)
+        self._setup_pixel(frame_stack, frame_size, include_state, render_channel)
 
 
 class LandPixelEnv(_PixelObsMixin, LandEnv):
@@ -1119,15 +1144,16 @@ class LandPixelEnv(_PixelObsMixin, LandEnv):
         frame_stack: int = 3,
         frame_size: tuple = (84, 84),
         include_state: bool = False,
+        render_channel: str | None = None,
     ) -> None:
-        if pixel_channels is None:
-            pixel_channels = ['rgb']
+        self._pixel_channels = pixel_channels if pixel_channels is not None else ['rgb']
+        self._render_channel = render_channel
         super().__init__(
             seed, agent_type, control_abstraction, location, rotation,
             batch_size, observation_type, show_viewer, timestep,
             action_stack, target_factor, render_mode,
         )
-        self._setup_pixel(pixel_channels, frame_stack, frame_size, include_state)
+        self._setup_pixel(frame_stack, frame_size, include_state, render_channel)
 
 
 class DockPixelEnv(_PixelObsMixin, DockEnv):
@@ -1151,15 +1177,16 @@ class DockPixelEnv(_PixelObsMixin, DockEnv):
         frame_stack: int = 3,
         frame_size: tuple = (84, 84),
         include_state: bool = False,
+        render_channel: str | None = None,
     ) -> None:
-        if pixel_channels is None:
-            pixel_channels = ['rgb']
+        self._pixel_channels = pixel_channels if pixel_channels is not None else ['rgb']
+        self._render_channel = render_channel
         super().__init__(
             seed, agent_type, control_abstraction, location, rotation,
             batch_size, observation_type, show_viewer, timestep,
             action_stack, target_factor, render_mode,
         )
-        self._setup_pixel(pixel_channels, frame_stack, frame_size, include_state)
+        self._setup_pixel(frame_stack, frame_size, include_state, render_channel)
 
 
 class NavPixelEnv(_PixelObsMixin, NavEnv):
@@ -1183,15 +1210,16 @@ class NavPixelEnv(_PixelObsMixin, NavEnv):
         frame_stack: int = 3,
         frame_size: tuple = (84, 84),
         include_state: bool = False,
+        render_channel: str | None = None,
     ) -> None:
-        if pixel_channels is None:
-            pixel_channels = ['rgb']
+        self._pixel_channels = pixel_channels if pixel_channels is not None else ['rgb']
+        self._render_channel = render_channel
         super().__init__(
             seed, agent_type, control_abstraction, location, rotation,
             batch_size, observation_type, show_viewer, timestep,
             action_stack, target_factor, render_mode,
         )
-        self._setup_pixel(pixel_channels, frame_stack, frame_size, include_state)
+        self._setup_pixel(frame_stack, frame_size, include_state, render_channel)
 
 
 class TrajectoryPixelEnv(_PixelObsMixin, TrajectoryEnv):
@@ -1218,13 +1246,14 @@ class TrajectoryPixelEnv(_PixelObsMixin, TrajectoryEnv):
         frame_stack: int = 3,
         frame_size: tuple = (84, 84),
         include_state: bool = False,
+        render_channel: str | None = None,
     ) -> None:
-        if pixel_channels is None:
-            pixel_channels = ['rgb']
+        self._pixel_channels = pixel_channels if pixel_channels is not None else ['rgb']
+        self._render_channel = render_channel
         super().__init__(
             seed, agent_type, control_abstraction, location, rotation,
             batch_size, observation_type, show_viewer, timestep,
             action_stack, target_factor, target_trajectory, n_lookahead,
             waypoint_radius, render_mode,
         )
-        self._setup_pixel(pixel_channels, frame_stack, frame_size, include_state)
+        self._setup_pixel(frame_stack, frame_size, include_state, render_channel)
