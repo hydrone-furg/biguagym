@@ -1,12 +1,12 @@
 {
     "package_name": "SkyDive",               
     "world": "Pier-Harbor",                            
-    "main_agent": "robot0",                               
+    "main_agent": "robot",                               
     "ticks_per_sec": 20,
     "frames_per_sec": 20,                        
     "agents":[                                          
         {                                               
-            "agent_name": "robot0",                       
+            "agent_name": "robot",                       
             "agent_type": null,     
             "sensors": [
                 {

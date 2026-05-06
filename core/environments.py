@@ -95,7 +95,7 @@ class HoverEnv(BiguaGymEnv):
     def _build_params(self):
         env_params: dict = self._load_config(f"{CONFIG}/state.json")
 
-        _id = self._agent_id(env_params, 'robot0')
+        _id = self._agent_id(env_params, 'robot')
 
         env_params['agents'][_id]['agent_type'] = self._agent_type
         env_params['agents'][_id]['control_abstraction'] = self._control_abstraction
@@ -937,6 +937,87 @@ class TrajectoryEnv(NavEnv):
 
 
 # ---------------------------------------------------------------------------
+# _RangeObsMixin
+# ---------------------------------------------------------------------------
+
+class _RangeObsMixin:
+    """Mixin that appends range/sonar sensor observations to the flat state vector.
+
+    Sensor assignment by domain:
+    - Aerial  (DjiMatrice):                  RangeFinderSensor only  → +10 dims
+    - Underwater (BlueROV2, BlueROVHeavy,
+                  TorpedoAUV):               ProfilingSonar only     → +100 dims
+    - Surface / Multi-domain (BlueBoat,
+                              Hydrone):      both sensors            → +110 dims
+
+    Place before the task env in the MRO.  No extra ``__init__`` is needed.
+    ProfilingSonar data arrives as ``{'raw': (10,10) float32}`` and is
+    automatically flattened to 100 dimensions.
+    """
+
+    @property
+    def _use_range_finder(self) -> bool:
+        return self._agent_type not in DOMAIN['underwater']
+
+    @property
+    def _use_profiling_sonar(self) -> bool:
+        return self._agent_type not in DOMAIN['aereo']
+
+    @property
+    def _range_extra_dim(self) -> int:
+        return (10 if self._use_range_finder else 0) + (100 if self._use_profiling_sonar else 0)
+
+    def _build_params(self):
+        env_params, obs_params = super()._build_params()
+        range_cfg = self._load_config(f"{CONFIG}/range.json")
+        _id = self._agent_id(env_params, 'robot')
+        range_id = self._agent_id(range_cfg, 'robot')
+
+        wanted = set()
+        if self._use_range_finder:
+            wanted.add('RangeFinderSensor')
+        if self._use_profiling_sonar:
+            wanted.add('ProfilingSonar')
+
+        sensors_to_add = [
+            s for s in range_cfg['agents'][range_id]['sensors']
+            if s.get('sensor_type') in wanted
+        ]
+        env_params['agents'][_id]['sensors'].extend(sensors_to_add)
+        return env_params, obs_params
+
+    def _init_spaces(self) -> None:
+        super()._init_spaces()
+        base_dim = self.observation_space.shape[0]
+        self.observation_space = spaces.Box(
+            low=-np.inf, high=np.inf,
+            shape=(base_dim + self._range_extra_dim,),
+            dtype=np.float32,
+        )
+
+    def _wrap_state(self, state: dict) -> NDArray:
+        base_obs = super()._wrap_state(state)
+        parts = [base_obs]
+
+        if self._use_range_finder:
+            rf = state.get('RangeFinderSensor')
+            parts.append(
+                np.asarray(rf, dtype=np.float32).ravel()
+                if rf is not None else np.zeros(10, dtype=np.float32)
+            )
+
+        if self._use_profiling_sonar:
+            sonar = state.get('ProfilingSonar')
+            if sonar is not None:
+                raw = sonar['raw'] if isinstance(sonar, dict) else sonar
+                parts.append(np.asarray(raw, dtype=np.float32).ravel())
+            else:
+                parts.append(np.zeros(100, dtype=np.float32))
+
+        return np.concatenate(parts)
+
+
+# ---------------------------------------------------------------------------
 # _PixelObsMixin
 # ---------------------------------------------------------------------------
 
@@ -984,8 +1065,8 @@ class _PixelObsMixin:
     def _build_params(self):
         env_params, obs_params = super()._build_params()
         pixel_cfg = self._load_config(f"{CONFIG}/pixels.json")
-        _id = self._agent_id(env_params, 'robot0')
-        pixel_id = self._agent_id(pixel_cfg, 'robot0')
+        _id = self._agent_id(env_params, 'robot')
+        pixel_id = self._agent_id(pixel_cfg, 'robot')
 
         required = {self._CHANNEL_SENSOR[ch] for ch in self._pixel_channels if ch in self._CHANNEL_SENSOR}
         # Also load the render channel sensor even when it is not an observation channel.
@@ -1257,3 +1338,69 @@ class TrajectoryPixelEnv(_PixelObsMixin, TrajectoryEnv):
             waypoint_radius, render_mode,
         )
         self._setup_pixel(frame_stack, frame_size, include_state, render_channel)
+
+
+# ---------------------------------------------------------------------------
+# Range env classes  (-v2)
+# ---------------------------------------------------------------------------
+
+class NavRangeEnv(_RangeObsMixin, NavEnv):
+    """Range/sonar-observation variant of :class:`NavEnv`.
+
+    Observation = flat state vector + range sensor data.
+    Sensor assignment follows domain rules defined in :class:`_RangeObsMixin`.
+    """
+
+    def __init__(
+        self,
+        seed: int,
+        agent_type: str,
+        control_abstraction: str,
+        location: list,
+        rotation: list,
+        batch_size: int = 1,
+        observation_type: str | List[str] = "DynamicsSensor",
+        show_viewer: bool = False,
+        timestep: bool = False,
+        action_stack: int = 1,
+        target_factor: int = 1,
+        render_mode: str = None,
+    ) -> None:
+        super().__init__(
+            seed, agent_type, control_abstraction, location, rotation,
+            batch_size, observation_type, show_viewer, timestep,
+            action_stack, target_factor, render_mode,
+        )
+
+
+class TrajectoryRangeEnv(_RangeObsMixin, TrajectoryEnv):
+    """Range/sonar-observation variant of :class:`TrajectoryEnv`.
+
+    Observation = flat state + Frenet/lookahead augmentation + range sensor data.
+    Sensor assignment follows domain rules defined in :class:`_RangeObsMixin`.
+    """
+
+    def __init__(
+        self,
+        seed: int,
+        agent_type: str,
+        control_abstraction: str,
+        location: list,
+        rotation: list,
+        batch_size: int = 1,
+        observation_type: str | List[str] = "DynamicsSensor",
+        show_viewer: bool = False,
+        timestep: bool = False,
+        action_stack: int = 1,
+        target_factor: int = 1,
+        target_trajectory: str | NDArray = 'sine',
+        n_lookahead: int = 5,
+        waypoint_radius: float = 0.2,
+        render_mode: str = None,
+    ) -> None:
+        super().__init__(
+            seed, agent_type, control_abstraction, location, rotation,
+            batch_size, observation_type, show_viewer, timestep,
+            action_stack, target_factor, target_trajectory, n_lookahead,
+            waypoint_radius, render_mode,
+        )
