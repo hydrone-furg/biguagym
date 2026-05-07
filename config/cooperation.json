@@ -59,46 +59,45 @@
                     },
                     "location" : [0,0,0],
                     "rotation" : [0,0,0]
-                },
-                {
-                    "sensor_name": "RGBCamera",
-                    "sensor_type": "RGBCamera",
-                    "socket": "Viewport",
-                    "configuration": {
-                        "CaptureWidth" : 1280,
-                        "CaptureHeight" : 720
-                    },
-                    "location": [0,0,0],
-                    "rotation": [0,0,0]
-                },
-                {
-                    "sensor_name": "DepthCamera",
-                    "sensor_type": "DepthCamera",
-                    "socket": "Viewport",
-                    "configuration": {
-                        "CaptureWidth" : 1280,
-                        "CaptureHeight" : 720,
-                        "Debug": true
-                    },
-                    "location": [0,0,0],
-                    "rotation": [0,0,0]
-                },
-                {
-                    "sensor_name": "AnnotationComponent",
-                    "sensor_type": "AnnotationComponent",
-                    "socket": "Viewport",
-                    "configuration": {
-                        "CaptureWidth" : 1280,
-                        "CaptureHeight" : 720
-                    },
-                    "location": [0,0,0],
-                    "rotation": [0,0,0]
                 }
             ],
             "dynamics" : {
                 "batch_size" : null
             },
             "control_abstraction": null,
+            "location": null,
+            "rotation": null
+        },
+        {
+            "agent_name": "target_robot",
+            "agent_type": "BlueBoat",
+            "sensors": [
+                {
+                    "sensor_type": "DynamicsSensor",
+                    "socket": "IMUSocket",
+                    "configuration": {
+                        "UseCOM": true,
+                        "UseRPY": false
+                    },
+                    "location" : [0,0,0],
+                    "rotation" : [0,0,0]
+                },
+                {
+                    "sensor_name": "RPYDynamicsSensor",
+                    "sensor_type": "DynamicsSensor",
+                    "socket": "IMUSocket",
+                    "configuration": {
+                        "UseCOM": false,
+                        "UseRPY": true
+                    },
+                    "location" : [0,0,0],
+                    "rotation" : [0,0,0]
+                }
+            ],
+            "dynamics" : {
+                "batch_size" : null
+            },
+            "control_abstraction": "cmd_pos_yaw",
             "location": null,
             "rotation": null
         }

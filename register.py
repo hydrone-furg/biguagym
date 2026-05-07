@@ -197,6 +197,12 @@ gym.register(
     kwargs={'seed': 42, 'agent_type': 'DjiMatrice', 'control_abstraction': 'cmd_motor_speeds',
             'location': [100, 100, 5], 'rotation': [0, 0, 0]},
 )
+gym.register(
+    id="DjiMatriceLand-v2",
+    entry_point="core.environments:LandCoopPixelEnv",
+    kwargs={'seed': 42, 'agent_type': 'DjiMatrice', 'control_abstraction': 'cmd_motor_speeds',
+            'location': [100, 100, 5], 'rotation': [0, 0, 0]},
+)
 
 gym.register(
     id="DjiMatriceNav-v0",
@@ -262,6 +268,12 @@ gym.register(
 gym.register(
     id="HydroneLand-v1",
     entry_point="core.environments:LandPixelEnv",
+    kwargs={'seed': 42, 'agent_type': 'Hydrone', 'control_abstraction': 'cmd_motor_speeds',
+            'location': [100, 100, 5], 'rotation': [0, 0, 0]},
+)
+gym.register(
+    id="HydroneLand-v2",
+    entry_point="core.environments:LandCoopPixelEnv",
     kwargs={'seed': 42, 'agent_type': 'Hydrone', 'control_abstraction': 'cmd_motor_speeds',
             'location': [100, 100, 5], 'rotation': [0, 0, 0]},
 )

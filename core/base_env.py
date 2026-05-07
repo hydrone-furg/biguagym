@@ -31,6 +31,7 @@ Public API
 """
 
 import json
+import os
 
 import numpy as np
 import gymnasium as gym
@@ -139,7 +140,7 @@ class PixelStack:
         raw = dict(zip(self._CHANNELS, obs))
         for k in self._dtype:
             img = np.resize(raw[k], (3, *self._pre_aug))
-            if k == "segmentation":
+            if k in ("rgb", "segmentation"):
                 img = img.astype(np.uint8)
             self._stack[k].append(img)
             if len(self._stack[k]) == 1:
@@ -601,6 +602,9 @@ class BiguaGymEnv(BaseEnv):
             Frames per second of the output video.
         """
         import cv2  # noqa: F401 — validate import early
+        directory = os.path.dirname(path)
+        if directory:
+            os.makedirs(directory, exist_ok=True)
         self._record_path = path
         self._record_fps = fps
         self._record_writer = None  # created lazily on first frame (need frame shape)

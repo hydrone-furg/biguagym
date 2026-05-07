@@ -1,5 +1,8 @@
+.vscode/
 __pycache__/
 
 test.py
-test2.py
+
+#ai
+.claude/
 CLAUDE.md

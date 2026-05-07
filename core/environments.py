@@ -127,7 +127,7 @@ class HoverEnv(BiguaGymEnv):
     def _wrap_state(self, state: dict) -> NDArray:
         raw = state.get('CameraView')
         if raw is not None:
-            self._last_render_frame = np.asarray(raw[:, :, 0:3], dtype=np.uint8)
+            self._last_render_frame = np.asarray(raw, dtype=np.uint8)[:, :, 0:3]
         return np.concatenate([
             np.asarray(v, dtype=np.float32).ravel()
             for v in self._getter(state)
@@ -1106,7 +1106,8 @@ class _PixelObsMixin:
 
         # --- RGB: (H, W, 4) RGBA uint8 → drop alpha ---
         raw_rgb = state.get('RGBCamera')
-        rgb = np.asarray(raw_rgb[:, :, :3], dtype=np.float32) if raw_rgb is not None else np.zeros((h, w, 3), dtype=np.float32)
+        raw_rgb = np.asarray(raw_rgb).squeeze(0)
+        rgb = raw_rgb[:, :, :3] if raw_rgb.ndim > 0 else np.zeros((h, w, 3), dtype=np.float32)
 
         # --- Depth: dict with 'depth_map' key → (H, W) float32 → normalize to grayscale (H, W, 3) ---
         raw_depth = state.get('DepthCamera')
@@ -1123,7 +1124,8 @@ class _PixelObsMixin:
 
         # --- Segmentation: (H, W, 4) RGBA uint8 → drop alpha ---
         raw_seg = state.get('AnnotationComponent')
-        seg = np.asarray(raw_seg[:, :, :3], dtype=np.float32) if raw_seg is not None else np.zeros((h, w, 3), dtype=np.float32)
+        raw_seg = np.asarray(raw_seg).squeeze(0)
+        seg = raw_seg[:, :, :3] if raw_seg.ndim > 0 else np.zeros((h, w, 3), dtype=np.float32)
 
         # Normal: no sensor available; synthesised as zeros
         normal = np.zeros((h, w, 3), dtype=np.float32)
@@ -1132,9 +1134,10 @@ class _PixelObsMixin:
 
         # Override the render frame with the chosen pixel channel (pre-stack, uint8 BGR).
         if self._render_channel and self._render_channel in raw_frames:
-            import cv2
-            frame = np.clip(raw_frames[self._render_channel], 0, 255).astype(np.uint8)
-            self._last_render_frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+            # import cv2
+            # frame = np.clip(raw_frames[self._render_channel], 0, 255).astype(np.uint8)
+            # self._last_render_frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+            self._last_render_frame = raw_frames[self._render_channel]
 
         self._pixel_stack_obj.append((rgb, depth, seg, normal), self._wrap_is_reset)
         self._wrap_is_reset = False
@@ -1338,6 +1341,213 @@ class TrajectoryPixelEnv(_PixelObsMixin, TrajectoryEnv):
             waypoint_radius, render_mode,
         )
         self._setup_pixel(frame_stack, frame_size, include_state, render_channel)
+
+
+# ---------------------------------------------------------------------------
+# LandCoopPixelEnv  (mobile-target landing, -v2)
+# ---------------------------------------------------------------------------
+
+class LandCoopPixelEnv(_PixelObsMixin, LandEnv):
+    """Pixel-observation landing on a mobile BlueBoat target.
+
+    The landing pad is a BlueBoat agent (``target_robot``) that moves along a
+    sinusoidal or figure-8 surface trajectory.  Each step the boat receives a
+    position command ``[x, y, z, yaw]`` via ``cmd_pos_yaw``; the main agent
+    must descend and land on the moving pad.
+
+    Pixel cameras are rotated ``[0, −90, 0]`` so they face straight down,
+    giving a top-down view ideal for pad detection.
+
+    Parameters
+    ----------
+    target_trajectory:
+        ``'sine'`` or ``'figure8'`` — path shape for the boat.
+    trajectory_scale:
+        Amplitude / radius of the boat's path in metres.
+    trajectory_speed:
+        Phase increment per simulation step (rad/step).  Controls how fast
+        the boat moves along its path.
+    """
+
+    def __init__(
+        self,
+        seed: int,
+        agent_type: str,
+        control_abstraction: str,
+        location: list,
+        rotation: list,
+        batch_size: int = 1,
+        observation_type: str | List[str] = "DynamicsSensor",
+        show_viewer: bool = False,
+        timestep: bool = False,
+        action_stack: int = 1,
+        target_factor: int = 1,
+        render_mode: str = None,
+        pixel_channels: list = None,
+        frame_stack: int = 3,
+        frame_size: tuple = (84, 84),
+        include_state: bool = False,
+        render_channel: str | None = None,
+        target_trajectory: str = 'sine',
+        trajectory_scale: float = 5.0,
+        trajectory_speed: float = 0.02,
+    ) -> None:
+        self._pixel_channels = pixel_channels if pixel_channels is not None else ['rgb']
+        self._render_channel = render_channel
+        self._target_trajectory_type = target_trajectory
+        self._trajectory_scale = trajectory_scale
+        self._trajectory_speed = trajectory_speed
+        self._traj_phase = 0.0
+
+        super().__init__(
+            seed, agent_type, control_abstraction, location, rotation,
+            batch_size, observation_type, show_viewer, timestep,
+            action_stack, target_factor, render_mode,
+        )
+        self._setup_pixel(frame_stack, frame_size, include_state, render_channel)
+
+    def _build_params(self):
+        # Use cooperation.json (robot + target_robot) instead of state.json
+        env_params = self._load_config(f"{CONFIG}/cooperation.json")
+
+        _id = self._agent_id(env_params, 'robot')
+        env_params['agents'][_id]['agent_type'] = self._agent_type
+        env_params['agents'][_id]['control_abstraction'] = self._control_abstraction
+        env_params['agents'][_id]['location'] = self._location
+        env_params['agents'][_id]['rotation'] = self._rotation
+        env_params['agents'][_id]['dynamics']['batch_size'] = self._batch_size
+
+        # Place the boat at surface level near the robot's xy spawn position
+        target_id = self._agent_id(env_params, 'target_robot')
+        env_params['agents'][target_id]['location'] = [
+            float(self._location[0]), float(self._location[1]), 0.0
+        ]
+        env_params['agents'][target_id]['rotation'] = [0, 0, 0]
+        env_params['agents'][target_id]['dynamics']['batch_size'] = 1
+
+        loc = np.asarray(self._location, dtype=np.float32)
+        self._bounds = np.array([loc - 10.0, loc + 10.0])
+        self._bounds[0, 2] = max(float(self._bounds[0, 2]), 0.1)
+        self._bounds[1, 2] = max(float(loc[2]), 2.0 * self._bounds[0, 2])
+
+        if isinstance(self._observation_type, str):
+            self._observation_type = [self._observation_type]
+        obs_params = {
+            obs_type: np.zeros(DATA_REGISTRY[obs_type]).ravel().shape
+            for obs_type in self._observation_type
+        }
+
+        # Add pixel cameras from pixels.json with downward-looking rotation
+        pixel_cfg = self._load_config(f"{CONFIG}/pixels.json")
+        pixel_id = self._agent_id(pixel_cfg, 'robot')
+        required = {self._CHANNEL_SENSOR[ch] for ch in self._pixel_channels if ch in self._CHANNEL_SENSOR}
+        rc = getattr(self, '_render_channel', None)
+        if rc and rc in self._CHANNEL_SENSOR:
+            required.add(self._CHANNEL_SENSOR[rc])
+
+        for s in pixel_cfg['agents'][pixel_id]['sensors']:
+            if s.get('sensor_name') in required:
+                cam = dict(s)
+                cam['rotation'] = [0, 90, 0]
+                env_params['agents'][_id]['sensors'].append(cam)
+
+        return env_params.copy(), obs_params.copy()
+
+    def _compute_target_pos(self, phase: float) -> list:
+        """Return ``[x, y, z, yaw]`` for the boat at the given trajectory phase."""
+        cx = float(self._location[0])
+        cy = float(self._location[1])
+        s = self._trajectory_scale
+
+        if self._target_trajectory_type == 'sine':
+            x = cx + s * np.sin(phase)
+            y = cy + s * np.cos(phase * 0.5)
+            dx = s * float(np.cos(phase))
+            dy = -s * 0.5 * float(np.sin(phase * 0.5))
+        else:  # figure8
+            x = cx + s * np.sin(phase)
+            y = cy + s * np.sin(phase) * np.cos(phase)
+            dx = s * float(np.cos(phase))
+            dy = s * float(np.cos(phase) ** 2 - np.sin(phase) ** 2)
+
+        yaw = float(np.arctan2(dy, dx))
+        return [float(x), float(y), 0.0, yaw]
+
+    def _reset(self):
+        # Randomise starting phase each episode for trajectory variety
+        self._traj_phase = float(self.rng.uniform(0, 2 * np.pi))
+        target_pos = self._compute_target_pos(self._traj_phase)
+        self._target = np.array(target_pos[:3], dtype=np.float32)
+        self._target_list = self._target.tolist()
+
+        # Signal _PixelObsMixin._wrap_state to flush the frame stack
+        self._wrap_is_reset = True
+
+        # Multi-agent reset returns {agent_name: {sensor_name: data}}
+        full_state = self._env.reset()
+        state = full_state['robot']
+        self._dynamics = np.asarray(state['RPYDynamicsSensor']).ravel()
+        self._episode_steps = 0
+        self._last_norm = None
+        self._on_target = False
+
+        return self._wrap_state(state), {}
+
+    def _step(self, action: NDArray) -> tuple:
+        self._episode_steps += self._action_repeat
+
+        # Advance the boat along its trajectory
+        self._traj_phase += self._trajectory_speed
+        target_pos = self._compute_target_pos(self._traj_phase)
+        self._target = np.array(target_pos[:3], dtype=np.float32)
+        self._target_list = self._target.tolist()
+
+        self._env_constraints()
+
+        flat = np.asarray(action, dtype=np.float32).ravel()
+        if self._batch_size > 1:
+            robot_action = np.tile(flat, (self._batch_size, 1)).tolist()
+        else:
+            robot_action = flat.tolist()
+
+        # Multi-agent step: robot gets control action, target_robot gets pos command
+        # Returns {agent_name: {sensor_name: data}}
+        full_state = self._env.step(
+            {'robot': robot_action, 'target_robot': target_pos},
+            action_repeat=self._action_repeat,
+        )
+        state = full_state['robot']
+        self._dynamics = np.asarray(state['RPYDynamicsSensor']).ravel()
+        obs = self._wrap_state(state)
+
+        pos = np.asarray(self._dynamics[6:9])
+        vel = np.asarray(self._dynamics[3:6])
+        r, p, _ = np.asarray(self._dynamics[15:])
+
+        truncated = self._episode_steps >= self.max_episode_steps
+        out_of_bounds = bool(np.any((pos < self._bounds[0]) | (pos > self._bounds[1])))
+
+        height_above_target = max(float(pos[2] - self._target[2]), 0.0)
+        proximity_weight = float(np.exp(-height_above_target / 3.0))
+        descent_speed = max(float(-vel[2]), 0.0)
+        hard_landing = bool(proximity_weight > 0.5 and descent_speed > 2.0)
+
+        terminated = bool(
+            (abs(r) > np.radians(15))
+            or (abs(p) > np.radians(15))
+            or out_of_bounds
+            or self._on_target
+            or hard_landing
+        )
+
+        reward = self._reward()
+        if self._on_target:
+            reward = 3.0 * abs(reward)
+        elif hard_landing:
+            reward = -5.0
+
+        info = {"reached_goals": int(self._on_target_buf), "hard_landing": hard_landing}
+        return obs, float(reward), terminated, truncated, info
 
 
 # ---------------------------------------------------------------------------
