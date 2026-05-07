@@ -1391,6 +1391,7 @@ class LandCoopPixelEnv(_PixelObsMixin, LandEnv):
         target_trajectory: str = 'sine',
         trajectory_scale: float = 5.0,
         trajectory_speed: float = 0.02,
+        camera_half_fov_deg: float = 45.0,
     ) -> None:
         self._pixel_channels = pixel_channels if pixel_channels is not None else ['rgb']
         self._render_channel = render_channel
@@ -1398,6 +1399,8 @@ class LandCoopPixelEnv(_PixelObsMixin, LandEnv):
         self._trajectory_scale = trajectory_scale
         self._trajectory_speed = trajectory_speed
         self._traj_phase = 0.0
+        self._traj_center = np.array([location[0], location[1]], dtype=np.float32)
+        self._camera_half_fov_deg = camera_half_fov_deg
 
         super().__init__(
             seed, agent_type, control_abstraction, location, rotation,
@@ -1426,7 +1429,7 @@ class LandCoopPixelEnv(_PixelObsMixin, LandEnv):
         env_params['agents'][target_id]['dynamics']['batch_size'] = 1
 
         loc = np.asarray(self._location, dtype=np.float32)
-        self._bounds = np.array([loc - 10.0, loc + 10.0])
+        self._bounds = np.array([loc - 20.0, loc + 20.0])
         self._bounds[0, 2] = max(float(self._bounds[0, 2]), 0.1)
         self._bounds[1, 2] = max(float(loc[2]), 2.0 * self._bounds[0, 2])
 
@@ -1448,25 +1451,48 @@ class LandCoopPixelEnv(_PixelObsMixin, LandEnv):
         for s in pixel_cfg['agents'][pixel_id]['sensors']:
             if s.get('sensor_name') in required:
                 cam = dict(s)
+                cam['socket'] = 'CameraSocket'
+                if self._agent_type in DOMAIN['multi-domain']:
+                    cam['location'] = [0, 0, -1]
                 cam['rotation'] = [0, 90, 0]
                 env_params['agents'][_id]['sensors'].append(cam)
 
         return env_params.copy(), obs_params.copy()
 
+    def _env_constraints(self) -> None:
+        pass
+
+    def _sample_traj_center(self) -> NDArray:
+        """Sample (x, y) uniformly within the intersection of env xy-bounds and the
+        downward camera's FOV disk at spawn altitude."""
+        h = max(float(self._location[2]), 0.1)
+        fov_radius = h * np.tan(np.radians(self._camera_half_fov_deg))
+        cx, cy = float(self._location[0]), float(self._location[1])
+
+        x_lo, x_hi = float(self._bounds[0, 0]), float(self._bounds[1, 0])
+        y_lo, y_hi = float(self._bounds[0, 1]), float(self._bounds[1, 1])
+        bound_radius = min(x_hi - cx, cx - x_lo, y_hi - cy, cy - y_lo)
+
+        r = self.rng.uniform(0, fov_radius - ((bound_radius / self._trajectory_scale) * 0.5))
+        angle = self.rng.uniform(0.0, 2 * np.pi)
+
+        x = np.clip(cx + r * np.cos(angle), x_lo, x_hi)
+        y = np.clip(cy + r * np.sin(angle), y_lo, y_hi)
+        return np.array([x, y], dtype=np.float32)
+
     def _compute_target_pos(self, phase: float) -> list:
         """Return ``[x, y, z, yaw]`` for the boat at the given trajectory phase."""
-        cx = float(self._location[0])
-        cy = float(self._location[1])
+        tx, ty = float(self._traj_center[0]), float(self._traj_center[1])
         s = self._trajectory_scale
 
         if self._target_trajectory_type == 'sine':
-            x = cx + s * np.sin(phase)
-            y = cy + s * np.cos(phase * 0.5)
+            x = tx + s * np.sin(phase)
+            y = ty + s * np.cos(phase * 0.5)
             dx = s * float(np.cos(phase))
             dy = -s * 0.5 * float(np.sin(phase * 0.5))
         else:  # figure8
-            x = cx + s * np.sin(phase)
-            y = cy + s * np.sin(phase) * np.cos(phase)
+            x = tx + s * np.sin(phase)
+            y = ty + s * np.sin(phase) * np.cos(phase)
             dx = s * float(np.cos(phase))
             dy = s * float(np.cos(phase) ** 2 - np.sin(phase) ** 2)
 
@@ -1474,17 +1500,37 @@ class LandCoopPixelEnv(_PixelObsMixin, LandEnv):
         return [float(x), float(y), 0.0, yaw]
 
     def _reset(self):
-        # Randomise starting phase each episode for trajectory variety
-        self._traj_phase = float(self.rng.uniform(0, 2 * np.pi))
+        # Multi-agent reset returns {agent_name: {sensor_name: data}}
+        full_state = self._env.reset()
+
+        # Resample trajectory center within FOV (gated by target_factor curriculum)
+        if self._on_target_buf % self._target_factor == 0:
+            self._traj_center = self._sample_traj_center()
+            tx, ty = float(self._traj_center[0]), float(self._traj_center[1])
+            yaw = float(np.arctan2(ty, tx))
+            self._env.move_agent('target_robot', [tx, ty, 0.1], [0.0,0.0,yaw])
+            
+
+        # Boat starts at the trajectory origin, which is the center itself:
+        # figure8 at phase=0 → (tx, ty);  sine at phase=π → (tx, ty)
+        self._traj_phase = 0.0 if self._target_trajectory_type == 'figure8' else np.pi
         target_pos = self._compute_target_pos(self._traj_phase)
         self._target = np.array(target_pos[:3], dtype=np.float32)
         self._target_list = self._target.tolist()
 
-        # Signal _PixelObsMixin._wrap_state to flush the frame stack
         self._wrap_is_reset = True
 
-        # Multi-agent reset returns {agent_name: {sensor_name: data}}
-        full_state = self._env.reset()
+        # Teleport target_robot to its phase-based start position.
+        # env.reset() always restores config spawn (cx, cy); one step with zero
+        # robot action physically moves the boat to the sampled start position.
+        
+        flat = np.zeros(int(self._env.action_space.shape[0]), dtype=np.float32)
+        robot_action = flat.tolist() if self._batch_size == 1 else np.tile(flat, (self._batch_size, 1)).tolist()
+        full_state = self._env.step(
+            {'robot': robot_action, 'target_robot': target_pos},
+            action_repeat=1,
+        )
+
         state = full_state['robot']
         self._dynamics = np.asarray(state['RPYDynamicsSensor']).ravel()
         self._episode_steps = 0
