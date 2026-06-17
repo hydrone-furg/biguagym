@@ -1,6 +1,9 @@
 .vscode/
 __pycache__/
 
+*.mp4
+test*.py
+
 #ai
 .claude/
 CLAUDE.md
