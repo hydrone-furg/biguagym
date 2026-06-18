@@ -215,7 +215,6 @@ class HoverEnv(BiguaGymEnv):
         out_of_bounds = bool(
             np.any((pos < self._bounds[0]) | (pos > self._bounds[1]))
         )
-        print(out_of_bounds, pos, self._bounds[0], self._bounds[1])
         terminated = bool(
             (abs(r) > np.radians(15))
             or (abs(p) > np.radians(15))
