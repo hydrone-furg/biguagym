@@ -365,6 +365,18 @@ gym.register(
             'location': [100, 100, -0.2], 'rotation': [0, 0, 0]},
 )
 gym.register(
+    id="TorpedoTrajectoryFollower-v0",
+    entry_point="core.environments:TrajectoryEnv",
+    kwargs={'seed': 42, 'agent_type': 'TorpedoAUV', 'control_abstraction': 'cmd_motor_speeds',
+            'location': [100, 100, 0], 'rotation': [0, 0, 0]},
+)
+gym.register(
+    id="TorpedoTrajectoryFollower-v1",
+    entry_point="core.environments:TrajectoryPixelEnv",
+    kwargs={'seed': 42, 'agent_type': 'TorpedoAUV', 'control_abstraction': 'cmd_motor_speeds',
+            'location': [100, 100, 0], 'rotation': [0, 0, 0]},
+)
+gym.register(
     id="TorpedoTrajectoryFollower-v2",
     entry_point="core.environments:TrajectoryRangeEnv",
     kwargs={'seed': 42, 'agent_type': 'TorpedoAUV', 'control_abstraction': 'cmd_rudders_sterns_motor_speed',
