@@ -1103,10 +1103,11 @@ class _PixelObsMixin:
 
         h, w = self._frame_size
 
-        # --- RGB: (H, W, 4) RGBA uint8 → drop alpha ---
-        raw_rgb = state.get('RGBCamera')
-        raw_rgb = np.asarray(raw_rgb).squeeze(0)
-        rgb = raw_rgb[:, :, :3] if raw_rgb.ndim > 0 else np.zeros((h, w, 3), dtype=np.float32)
+        # --- RGB: (H, W, 4) RGBA uint8 → drop alpha (tolerate optional batch axis) ---
+        raw_rgb = np.asarray(state.get('RGBCamera'))
+        if raw_rgb.ndim == 4 and raw_rgb.shape[0] == 1:
+            raw_rgb = raw_rgb[0]
+        rgb = raw_rgb[:, :, :3] if raw_rgb.ndim == 3 else np.zeros((h, w, 3), dtype=np.float32)
 
         # --- Depth: dict with 'depth_map' key → (H, W) float32 → normalize to grayscale (H, W, 3) ---
         raw_depth = state.get('DepthCamera')
@@ -1121,10 +1122,15 @@ class _PixelObsMixin:
         else:
             depth = np.zeros((h, w, 3), dtype=np.float32)
 
-        # --- Segmentation: (H, W, 4) RGBA uint8 → drop alpha ---
+        # --- Segmentation: (H, W, 4) RGBA uint8 → drop alpha (may be absent) ---
         raw_seg = state.get('AnnotationComponent')
-        raw_seg = np.asarray(raw_seg).squeeze(0)
-        seg = raw_seg[:, :, :3] if raw_seg.ndim > 0 else np.zeros((h, w, 3), dtype=np.float32)
+        if raw_seg is not None:
+            raw_seg = np.asarray(raw_seg)
+            if raw_seg.ndim == 4 and raw_seg.shape[0] == 1:
+                raw_seg = raw_seg[0]
+            seg = raw_seg[:, :, :3] if raw_seg.ndim == 3 else np.zeros((h, w, 3), dtype=np.float32)
+        else:
+            seg = np.zeros((h, w, 3), dtype=np.float32)
 
         # Normal: no sensor available; synthesised as zeros
         normal = np.zeros((h, w, 3), dtype=np.float32)
