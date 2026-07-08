@@ -133,9 +133,16 @@ class HoverEnv(BiguaGymEnv):
             for v in self._getter(state)
         ])
 
+    def _set_dynamics(self, state: dict) -> None:
+        # RPYDynamicsSensor reports roll/pitch/yaw (indices 15:) in degrees;
+        # convert here so every downstream radian comparison/trig call is correct.
+        dynamics = np.asarray(state['RPYDynamicsSensor'], dtype=np.float64).ravel()
+        dynamics[15:] = np.radians(dynamics[15:])
+        self._dynamics = dynamics
+
     def _reset(self):
         state = self._env.reset()
-        self._dynamics = state['RPYDynamicsSensor']
+        self._set_dynamics(state)
         self._episode_steps = 0
         self._last_norm = None
         self._on_target = False
@@ -204,7 +211,7 @@ class HoverEnv(BiguaGymEnv):
             action_arg = flat.tolist()
 
         state = self._env.step(action_arg, action_repeat=self._action_repeat)
-        self._dynamics = state['RPYDynamicsSensor']
+        self._set_dynamics(state)
         obs = self._wrap_state(state)
 
         pos = np.asarray(self._dynamics[6:9])
@@ -221,6 +228,11 @@ class HoverEnv(BiguaGymEnv):
             or out_of_bounds
             or self._on_target
         )
+        # print(r, np.radians(15))
+        # print((abs(r) > np.radians(15))
+        #     or (abs(p) > np.radians(15))
+        #     or out_of_bounds
+        #     or self._on_target, (abs(r) > np.radians(15)), (abs(p) > np.radians(15)), out_of_bounds, self._on_target)
 
         reward = 3.0 * abs(self._reward()) if self._on_target else self._reward()
         info = {"reached_goals": int(self._on_target_buf)}
@@ -267,7 +279,7 @@ class LandEnv(HoverEnv):
     
     def _reset(self):
         state = self._env.reset()
-        self._dynamics = state['RPYDynamicsSensor']
+        self._set_dynamics(state)
         self._episode_steps = 0
         self._last_norm = None
         self._on_target = False
@@ -346,7 +358,7 @@ class LandEnv(HoverEnv):
             action_arg = flat.tolist()
 
         state = self._env.step(action_arg, action_repeat=self._action_repeat)
-        self._dynamics = state['RPYDynamicsSensor']
+        self._set_dynamics(state)
         obs = self._wrap_state(state)
 
         pos = np.asarray(self._dynamics[6:9])
@@ -428,7 +440,7 @@ class DockEnv(LandEnv):
     
     def _reset(self):
         state = self._env.reset()
-        self._dynamics = state['RPYDynamicsSensor']
+        self._set_dynamics(state)
         self._episode_steps = 0
         self._last_norm = None
         self._on_target = False
@@ -453,7 +465,7 @@ class DockEnv(LandEnv):
             action_arg = flat.tolist()
 
         state = self._env.step(action_arg, action_repeat=self._action_repeat)
-        self._dynamics = state['RPYDynamicsSensor']
+        self._set_dynamics(state)
         obs = self._wrap_state(state)
 
         pos = np.asarray(self._dynamics[6:9])
@@ -876,7 +888,7 @@ class TrajectoryEnv(NavEnv):
 
     def _reset(self) -> tuple:
         state = self._env.reset()
-        self._dynamics = state['RPYDynamicsSensor']
+        self._set_dynamics(state)
         self._episode_steps = 0
         self._last_norm = None
         self._on_target = False
@@ -895,7 +907,7 @@ class TrajectoryEnv(NavEnv):
         )
 
         state = self._env.step(action_arg, action_repeat=self._action_repeat)
-        self._dynamics = state['RPYDynamicsSensor']
+        self._set_dynamics(state)
         obs = self._wrap_state(state)  # updates _wp_idx via _find_nearest_wp
 
         pos = np.asarray(self._dynamics[6:9])
@@ -1537,7 +1549,7 @@ class LandCoopPixelEnv(_PixelObsMixin, LandEnv):
         )
 
         state = full_state['robot']
-        self._dynamics = np.asarray(state['RPYDynamicsSensor']).ravel()
+        self._set_dynamics(state)
         self._episode_steps = 0
         self._last_norm = None
         self._on_target = False
@@ -1568,7 +1580,7 @@ class LandCoopPixelEnv(_PixelObsMixin, LandEnv):
             action_repeat=self._action_repeat,
         )
         state = full_state['robot']
-        self._dynamics = np.asarray(state['RPYDynamicsSensor']).ravel()
+        self._set_dynamics(state)
         obs = self._wrap_state(state)
 
         pos = np.asarray(self._dynamics[6:9])
