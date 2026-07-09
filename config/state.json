@@ -32,7 +32,8 @@
                 },
                 {
                     "sensor_name": "CameraView",
-                    "sensor_type": "ViewportCapture",
+                    "sensor_type": "RGBCamera",
+                    "socket": "Viewport",
                     "configuration" : {
                         "CaptureWidth" : 1280,
                         "CaptureHeight" : 720

@@ -228,11 +228,6 @@ class HoverEnv(BiguaGymEnv):
             or out_of_bounds
             or self._on_target
         )
-        # print(r, np.radians(15))
-        # print((abs(r) > np.radians(15))
-        #     or (abs(p) > np.radians(15))
-        #     or out_of_bounds
-        #     or self._on_target, (abs(r) > np.radians(15)), (abs(p) > np.radians(15)), out_of_bounds, self._on_target)
 
         reward = 3.0 * abs(self._reward()) if self._on_target else self._reward()
         info = {"reached_goals": int(self._on_target_buf)}
@@ -542,7 +537,7 @@ class NavEnv(HoverEnv):
             self._bounds[0, 2] = 0.0
 
         elif self._agent_type in DOMAIN['surface']:
-            self._bounds[0, 2] = -0.5
+            self._bounds[0, 2] = -1
             self._bounds[1, 2] = 0.1
 
         elif self._agent_type in DOMAIN['underwater']:
